@@ -364,7 +364,136 @@ app.post('/api/deploy', wrap(async (req, res) => {
 app.get('/api/job/:id', wrap(async (req, res) => {
   const job = jobs.get(parseInt(req.params.id, 10));
   if (!job) return res.status(404).json({ error: 'nie ma takiego joba' });
-  res.json({ status: job.status, log: job.log.slice(-80), name: job.name });
+  res.json({ status: job.status, log: job.log.slice(-120), name: job.name, result: job.result || null });
+}));
+
+// ── AI: lokalny Claude (Opus 4.8, kontekst 1M) analizuje i pisze ────────────
+const JOBS_DIR = path.join(__dirname, '.jobs');
+const CLAUDE_CMD = `claude -p --model 'claude-opus-4-8[1m]' --dangerously-skip-permissions --output-format stream-json --verbose`;
+
+function apexOf(siteUrl) {
+  try { return new URL(siteUrl).hostname; } catch { return siteUrl || ''; }
+}
+
+// stream-json → czytelny log postępu (nazwy narzędzi + fragmenty tekstu)
+function pushStreamLine(job, line) {
+  try {
+    const j = JSON.parse(line);
+    if (j.type === 'assistant') {
+      for (const c of j.message?.content || []) {
+        if (c.type === 'tool_use') job.log.push(`→ ${c.name}${c.input?.file_path ? ' ' + c.input.file_path : ''}${c.input?.query ? ' „' + c.input.query + '"' : ''}`);
+        else if (c.type === 'text' && c.text.trim()) job.log.push(...c.text.trim().split('\n').slice(0, 4));
+      }
+    } else if (j.type === 'result') {
+      job.claudeResult = j.result || '';
+      job.log.push(`— Claude skończył (${Math.round((j.duration_ms || 0) / 1000)}s, ${j.num_turns || '?'} tur)`);
+    }
+  } catch {
+    if (line.trim()) job.log.push(line);
+  }
+  if (job.log.length > 800) job.log.splice(0, job.log.length - 800);
+}
+
+async function launchClaudeJob(site, prompt, { label, andDeploy = false, onDone } = {}) {
+  await fsp.mkdir(JOBS_DIR, { recursive: true });
+  const id = ++jobSeq;
+  const promptFile = path.join(JOBS_DIR, `prompt-${id}.txt`);
+  await fsp.writeFile(promptFile, prompt, 'utf8');
+  const job = { id, dir: site.dir, name: `${label}: ${site.name}`, status: 'running', log: [], started: Date.now() };
+  jobs.set(id, job);
+  job.log.push(`⏳ ${label} — Claude (Opus 4.8, 1M) pracuje w ${site.dir}…`);
+
+  const bashPrompt = '/' + promptFile.replace(/\\/g, '/').replace(':', '');
+  const cmd = `cd . && cat "${bashPrompt}" | ${CLAUDE_CMD}${andDeploy ? ' && ./deploy.sh' : ''}`;
+  const child = spawn(GIT_BASH, ['-lc', cmd], { cwd: site.dir, windowsHide: true });
+  let buf = '';
+  child.stdout.on('data', (d) => {
+    buf += d.toString();
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop();
+    lines.forEach((l) => pushStreamLine(job, l));
+  });
+  child.stderr.on('data', (d) => d.toString().split(/\r?\n/).filter(Boolean).forEach((l) => job.log.push(l)));
+  child.on('close', (code) => {
+    job.status = code === 0 ? 'done' : 'failed';
+    job.ms = Date.now() - job.started;
+    job.log.push(code === 0 ? `✓ zakończono w ${Math.round(job.ms / 60000)} min` : `✗ exit code ${code}`);
+    fsp.unlink(promptFile).catch(() => {});
+    if (onDone) onDone(job, code);
+  });
+  child.on('error', (e) => { job.status = 'failed'; job.log.push(`✗ ${e.message}`); });
+  return job;
+}
+
+function aiContext(site, base) {
+  return `Jesteś w katalogu projektu Astro strony ${site.site_url || site.name} (katalog: ${site.dir}).
+Kolekcja artykułów blogowych: ${base}. Domena: ${apexOf(site.site_url)}.`;
+}
+
+// tryb "zaproponuj tematy": analiza treści + GSC/GA + web research → JSON propozycji
+app.post('/api/ai/propose', wrap(async (req, res) => {
+  const site = await siteById(req.body.site);
+  const base = req.body.base;
+  if (!base) return res.status(400).json({ error: 'brak base' });
+  const prompt = `${aiContext(site, base)}
+
+ZADANIE: zaproponuj 5 tematów na NOWY artykuł blogowy dla tej strony. NICZEGO nie zapisuj na dysku.
+
+Wykonaj analizę (wszystkie trzy źródła):
+1. Przeczytaj tytuły i tematykę istniejących artykułów w ${base} — nowe tematy nie mogą ich dublować, mają uzupełniać luki.
+2. Pobierz dane Google Search Console i GA4 dla domeny ${apexOf(site.site_url)} zgodnie z procedurą z Twojego globalnego CLAUDE.md (sekcja "Google Analytics (GA4) & Search Console"). Szukaj zapytań z wyświetleniami, na które strona nie ma dedykowanego artykułu, oraz artykułów z potencjałem na temat pokrewny.
+3. Zrób research w sieci (WebSearch): czego aktualnie szukają ludzie w tej tematyce, jakie tematy pokrywa konkurencja, czego brakuje.
+
+WYNIK: wypisz WYŁĄCZNIE czysty JSON (bez markdown, bez komentarzy):
+[{"temat":"...","uzasadnienie":"1-2 zdania dlaczego ten temat","zrodlo":"gsc|ga|web|content-gap"}]
+Dokładnie 5 pozycji, tematy po polsku.`;
+  const job = await launchClaudeJob(site, prompt, {
+    label: 'Propozycje tematów',
+    onDone: (j, code) => {
+      if (code !== 0) return;
+      try {
+        const m = (j.claudeResult || '').match(/\[[\s\S]*\]/);
+        j.result = { proposals: JSON.parse(m[0]) };
+      } catch { j.result = { error: 'nie udało się sparsować propozycji', raw: (j.claudeResult || '').slice(0, 2000) }; }
+    },
+  });
+  res.json({ ok: true, job: job.id });
+}));
+
+// tryb "napisz artykuł": temat z góry ALBO wolna ręka; opcjonalny auto-deploy
+app.post('/api/ai/write', wrap(async (req, res) => {
+  const site = await siteById(req.body.site);
+  const { base, mode = 'topic', topic, autodeploy = true } = req.body;
+  if (!base) return res.status(400).json({ error: 'brak base' });
+  if (mode === 'topic' && !topic) return res.status(400).json({ error: 'brak tematu' });
+
+  const topicPart = mode === 'free'
+    ? `TEMAT: dobierz SAM — masz pełną wolną rękę. Przeanalizuj istniejące artykuły w ${base}, dane GSC/GA4 domeny ${apexOf(site.site_url)} (procedura w globalnym CLAUDE.md) oraz zrób web research (WebSearch), i wybierz temat o największym potencjale, który uzupełnia luki strony. W logu uzasadnij wybór jednym akapitem.`
+    : `TEMAT artykułu (podany z góry): "${topic}"`;
+
+  const prompt = `${aiContext(site, base)}
+
+ZADANIE: napisz JEDEN nowy, długi artykuł blogowy i zapisz go w kolekcji.
+
+ETAP 1 — ANALIZA (obowiązkowa, zanim napiszesz choć zdanie):
+- przeczytaj 2-3 istniejące artykuły z ${base}: DOKŁADNY schemat frontmattera (wszystkie pola, format dat, kategorie/tagi w użyciu), styl, typową długość i strukturę nagłówków;
+- ${topicPart}
+- zrób rzetelny research (WebSearch): aktualne dane, liczby, fakty — artykuł ma być merytoryczny, nie lany.
+
+ETAP 2 — PISANIE:
+- załaduj skill "tekst-merytoryczny-pl" (narzędzie Skill) i pisz zgodnie z jego regułami — to nadrzędne wytyczne stylu;
+- minimum 1500 słów, po polsku, konkretnie, z przykładami i danymi z researchu;
+- frontmatter IDENTYCZNY ze schematem kolekcji (te same pola co istniejące pliki; kategorie/tagi wybierz z już używanych);
+- zapisz plik jako ${base}/<slug-z-tytulu>.md (slug: małe litery, bez polskich znaków, myślniki).
+
+NIE uruchamiaj deployu ani gita — deploy zrobi system po Tobie.
+Na końcu wypisz dokładnie jedną linię: CREATED: <względna ścieżka pliku>.`;
+
+  const job = await launchClaudeJob(site, prompt, {
+    label: mode === 'free' ? 'Artykuł (wolna ręka)' : 'Artykuł (AI)',
+    andDeploy: autodeploy && site.has_deploy,
+  });
+  res.json({ ok: true, job: job.id, autodeploy: autodeploy && site.has_deploy });
 }));
 
 app.use(express.static(path.join(__dirname, 'public')));

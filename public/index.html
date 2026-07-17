@@ -74,9 +74,21 @@
 
       <!-- lista plików -->
       <section id="view-files" class="view">
+        <div class="ai-bar">
+          <div class="ai-row">
+            <input type="text" id="ai-topic" placeholder="Temat artykułu (opcjonalnie — możesz też pozwolić AI wybrać)">
+            <button id="ai-write-btn" class="primary-btn" title="Claude (Opus 4.8, 1M) analizuje stronę + research i pisze artykuł na podany temat">✍️ Napisz (AI)</button>
+            <button id="ai-propose-btn" class="secondary-btn" title="AI proponuje tematy na bazie treści strony, danych GSC/GA i researchu w sieci">💡 Zaproponuj tematy</button>
+            <button id="ai-free-btn" class="secondary-btn" title="Pełna wolna ręka: AI sam dobiera temat i pisze">🎲 Wolna ręka</button>
+            <label class="ai-deploy-check" title="Po napisaniu artykułu automatycznie uruchom deploy.sh">
+              <input type="checkbox" id="ai-autodeploy" checked> auto-deploy
+            </label>
+          </div>
+          <div id="ai-proposals" class="ai-proposals hidden"></div>
+        </div>
         <div class="toolbar-row">
           <span id="files-count" class="count-label"></span>
-          <button id="new-file-btn" class="secondary-btn">+ Nowy artykuł</button>
+          <button id="new-file-btn" class="secondary-btn">+ Nowy artykuł (ręcznie)</button>
         </div>
         <div class="table-card"><table class="mc-table">
           <thead><tr><th>Tytuł</th><th>Plik</th><th>Data</th><th class="num">KB</th><th></th></tr></thead>

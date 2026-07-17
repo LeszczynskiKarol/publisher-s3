@@ -23,6 +23,25 @@ ląduje w `.backups/` (plus historia git projektu).
 invalidacja CloudFront) przez git-basha, z logiem na żywo w GUI. Projekty bez
 `deploy.sh` dostają fallback `npm run build` (z ostrzeżeniem).
 
+## AI: lokalny Claude pisze artykuły (Opus 4.8, kontekst 1M)
+
+Pasek AI nad listą artykułów uruchamia **lokalnego Claude'a CLI** w katalogu
+projektu (`claude -p --model 'claude-opus-4-8[1m]' --dangerously-skip-permissions`),
+z logiem postępu na żywo w GUI. Trzy tryby tematu:
+
+1. **Temat z góry** — wpisujesz temat → „Napisz (AI)".
+2. **„Zaproponuj tematy"** — Claude analizuje istniejące artykuły, dane GSC/GA4
+   domeny (procedura z globalnego CLAUDE.md) i robi web research → zwraca 5
+   propozycji z uzasadnieniem i źródłem (gsc/ga/web/content-gap); klik „Pisz"
+   przy wybranej.
+3. **„Wolna ręka"** — Claude sam dobiera temat (analiza + GSC/GA + research)
+   i pisze bez dalszych pytań.
+
+Każdy artykuł poprzedza obowiązkowa analiza (schemat frontmattera kolekcji,
+styl strony, research faktów w sieci), a styl pilnowany jest skillem
+`tekst-merytoryczny-pl`. Checkbox **auto-deploy** dokleja `./deploy.sh` po
+udanym pisaniu — całość od tematu do publikacji na jeden klik.
+
 ## API pod automatyzację (autoblogging)
 
 Nagłówek `x-api-key` zamiast sesji. Przyszły autoblogger (cron + Claude):

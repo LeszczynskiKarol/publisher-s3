@@ -258,6 +258,79 @@ async function pollJob() {
 
 $('#deploy-close').addEventListener('click', () => $('#deploy-panel').classList.add('hidden'));
 
+// ── AI (lokalny Claude: Opus 4.8, 1M) ───────────────────────────────────────
+function watchJob(jobId, title, { onResult } = {}) {
+  state.job = jobId;
+  $('#deploy-panel').classList.remove('hidden');
+  $('#deploy-title').innerHTML = `<span class="spinner"></span>${esc(title)}`;
+  (async function poll() {
+    try {
+      const j = await api(`/api/job/${jobId}`);
+      $('#deploy-log').textContent = j.log.join('\n');
+      $('#deploy-log').scrollTop = $('#deploy-log').scrollHeight;
+      if (j.status === 'running') return setTimeout(poll, 2500);
+      $('#deploy-title').textContent = (j.status === 'done' ? '✓ ' : '✗ ') + j.name;
+      toast(j.status === 'done' ? `${j.name} — gotowe.` : `${j.name} — błąd, sprawdź log.`, j.status === 'done' ? 'success' : 'error');
+      if (j.status === 'done' && onResult) onResult(j.result);
+      if (j.status === 'done') showFiles();
+    } catch { setTimeout(poll, 4000); }
+  })();
+}
+
+$('#ai-write-btn').addEventListener('click', async () => {
+  const topic = $('#ai-topic').value.trim();
+  if (!topic) { toast('Podaj temat albo użyj „Zaproponuj tematy" / „Wolna ręka".', 'error'); return; }
+  startAiWrite('topic', topic);
+});
+
+$('#ai-free-btn').addEventListener('click', () => {
+  if (!confirm(`Wolna ręka na ${state.site.name}?\nClaude sam przeanalizuje stronę, GSC/GA i sieć, wybierze temat, napisze artykuł${$('#ai-autodeploy').checked ? ' i zrobi deploy' : ''}.`)) return;
+  startAiWrite('free');
+});
+
+async function startAiWrite(mode, topic) {
+  try {
+    const out = await api('/api/ai/write', {
+      method: 'POST',
+      body: { site: state.site.id, base: state.base, mode, topic, autodeploy: $('#ai-autodeploy').checked },
+    });
+    $('#ai-topic').value = '';
+    $('#ai-proposals').classList.add('hidden');
+    watchJob(out.job, `Claude pisze (${state.site.name})${out.autodeploy ? ' + deploy' : ''} — zwykle 10-30 min`);
+  } catch (err) { toast(err.message, 'error'); }
+}
+
+$('#ai-propose-btn').addEventListener('click', async () => {
+  try {
+    const out = await api('/api/ai/propose', { method: 'POST', body: { site: state.site.id, base: state.base } });
+    watchJob(out.job, `Claude szuka tematów (${state.site.name}) — kilka minut`, {
+      onResult: (result) => {
+        if (!result?.proposals) { toast(result?.error || 'Brak propozycji.', 'error'); return; }
+        const box = $('#ai-proposals');
+        box.classList.remove('hidden');
+        box.innerHTML = '<div class="ai-prop-head">Propozycje tematów — kliknij „Pisz", żeby zlecić artykuł:</div>' +
+          result.proposals.map((p, i) => `
+          <div class="ai-prop">
+            <div class="ai-prop-body">
+              <div class="ai-prop-title">${esc(p.temat)} <span class="ai-prop-src">${esc(p.zrodlo || '')}</span></div>
+              <div class="ai-prop-why">${esc(p.uzasadnienie || '')}</div>
+            </div>
+            <button class="primary-btn ai-prop-go" data-i="${i}">Pisz</button>
+          </div>`).join('');
+        box.dataset.proposals = JSON.stringify(result.proposals);
+      },
+    });
+  } catch (err) { toast(err.message, 'error'); }
+});
+
+$('#ai-proposals').addEventListener('click', (e) => {
+  const btn = e.target.closest('.ai-prop-go');
+  if (!btn) return;
+  const proposals = JSON.parse($('#ai-proposals').dataset.proposals || '[]');
+  const p = proposals[+btn.dataset.i];
+  if (p) startAiWrite('topic', p.temat);
+});
+
 // ── init ────────────────────────────────────────────────────────────────────
 (async function init() {
   try {
