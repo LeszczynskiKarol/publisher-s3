@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Publisher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f59e0b' stroke-width='2'><path d='M12 20h9'/><path d='M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z'/></svg>">
+</head>
+<body>
+
+<div id="login-view" class="login-view hidden">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/></svg>
+    </div>
+    <h1>Publisher</h1>
+    <p class="login-sub">Publikacja artykułów na satelity S3</p>
+    <form id="login-form" autocomplete="off">
+      <label for="password" class="sr-only">Hasło</label>
+      <input type="password" id="password" placeholder="Hasło" autofocus required>
+      <button type="submit" id="login-btn">Zaloguj się</button>
+      <p id="login-error" class="login-error hidden"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app-view" class="app hidden">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/></svg>
+      <span class="logo-text">Publisher</span>
+    </div>
+    <div class="sidebar-actions">
+      <button id="add-site-btn" class="secondary-btn wide">+ Dodaj stronę</button>
+    </div>
+    <nav id="site-list" class="site-list" aria-label="Strony"></nav>
+    <div class="sidebar-footer">
+      <button id="history-btn" class="ghost-btn">Historia</button>
+      <button id="logout-btn" class="ghost-btn">Wyloguj</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="empty-state" class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/></svg>
+      <h2>Wybierz stronę</h2>
+      <p>Wybierz satelitę z listy albo dodaj nową.</p>
+    </div>
+
+    <div id="browser" class="browser hidden">
+      <header class="topbar">
+        <span id="site-label" class="site-label mono"></span>
+        <div class="tabs">
+          <button class="tab active" data-tab="new">Nowy artykuł</button>
+          <button class="tab" data-tab="articles">Artykuły</button>
+          <button class="tab" data-tab="template">Szablon</button>
+        </div>
+      </header>
+
+      <!-- nowy artykuł -->
+      <section id="view-new" class="view">
+        <div class="form-grid">
+          <label>Tytuł
+            <input type="text" id="art-title" placeholder="Jak zostać copywriterem w 2026">
+          </label>
+          <label>Slug (URL)
+            <input type="text" id="art-slug" class="mono" placeholder="(auto z tytułu)">
+          </label>
+          <label class="full">Meta description
+            <input type="text" id="art-desc" maxlength="180" placeholder="Krótki opis do wyników wyszukiwania (do 160 znaków)">
+          </label>
+          <label class="full">Treść
+            <div class="format-row">
+              <label class="radio"><input type="radio" name="format" value="markdown" checked> Markdown</label>
+              <label class="radio"><input type="radio" name="format" value="html"> HTML</label>
+            </div>
+            <textarea id="art-content" class="mono" spellcheck="false" placeholder="## Nagłówek&#10;&#10;Treść akapitu z **pogrubieniem** i [linkiem](https://...)&#10;&#10;- lista&#10;- punktów"></textarea>
+          </label>
+        </div>
+        <div class="publish-row">
+          <span id="publish-status" class="count-label"></span>
+          <button id="publish-btn" class="primary-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
+            Opublikuj
+          </button>
+        </div>
+        <div id="publish-result" class="steps hidden"></div>
+      </section>
+
+      <!-- artykuły -->
+      <section id="view-articles" class="view hidden">
+        <div class="table-card"><table class="mc-table">
+          <thead><tr><th>Slug</th><th>Zmodyfikowany</th><th class="num">Rozmiar</th><th></th></tr></thead>
+          <tbody id="articles-tbody"></tbody>
+        </table></div>
+      </section>
+
+      <!-- szablon -->
+      <section id="view-template" class="view hidden">
+        <p class="hint">
+          Szablon to pełny HTML strony artykułu z placeholderami:
+          <code>{{TITLE}}</code> <code>{{DESCRIPTION}}</code> <code>{{CONTENT}}</code>
+          <code>{{DATE}}</code> <code>{{CANONICAL}}</code> <code>{{SLUG}}</code>.
+          Przy pierwszym otwarciu podpowiadam HTML najnowszego artykułu z bucketa —
+          zamień w nim tytuł/treść na placeholdery i zapisz.
+        </p>
+        <textarea id="template-editor" class="mono" spellcheck="false"></textarea>
+        <div class="publish-row">
+          <span id="template-status" class="count-label"></span>
+          <button id="template-save" class="primary-btn">Zapisz szablon</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- historia -->
+    <div id="history-view" class="browser hidden">
+      <header class="topbar"><span class="site-label">Historia publikacji</span></header>
+      <section class="view">
+        <div class="table-card"><table class="mc-table">
+          <thead><tr><th>Kiedy</th><th>Domena</th><th>Tytuł</th><th>Kroki</th></tr></thead>
+          <tbody id="history-tbody"></tbody>
+        </table></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 class="modal-title">Dodaj stronę</h3>
+    <label class="m-label">Domena (z www, jeśli tak serwuje)
+      <input type="text" id="new-domain" class="mono" placeholder="www.przyklad.pl">
+    </label>
+    <label class="m-label">Bucket S3
+      <select id="new-bucket" class="mono"></select>
+    </label>
+    <label class="m-label">Prefiks bloga
+      <input type="text" id="new-prefix" class="mono" value="blog/">
+    </label>
+    <label class="m-label">Klucz sitemap
+      <input type="text" id="new-sitemap" class="mono" value="sitemap-0.xml">
+    </label>
+    <div class="modal-actions">
+      <button class="plain-btn" id="modal-cancel">Anuluj</button>
+      <button class="primary-btn" id="modal-save">Dodaj</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

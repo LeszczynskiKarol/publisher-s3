@@ -1,0 +1,11 @@
+# Kopiuj do frpc.toml i uzupełnij swoimi wartościami.
+serverAddr = "IP_TWOJEGO_SERWERA_FRPS"
+serverPort = 7000
+auth.method = "token"
+auth.token = "TWOJ_TOKEN_FRPS"
+
+[[proxies]]
+name = "publisher"
+type = "http"
+localPort = 4900
+customDomains = ["publish.twoja-domena.pl"]
