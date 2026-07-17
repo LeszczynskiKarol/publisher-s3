@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1640px; height: 924px; overflow: hidden; }
+  .cover {
+    position: relative;
+    width: 1640px; height: 924px;
+    background: #1A1F5C;
+    font-family: 'Poppins', sans-serif;
+  }
+  /* zdjęcie po prawej — prosta skośna krawędź; szewron rysowany NA niej */
+  .photo {
+    position: absolute; inset: 0;
+    background-image: url("{{PHOTO}}");
+    background-size: cover;
+    background-position: center;
+    clip-path: polygon(44% 0, 100% 0, 100% 100%, 58% 100%);
+  }
+  /* ciemniejszy szewron-cień, lekko przesunięty */
+  .chevron-shadow {
+    position: absolute; inset: 0;
+    background: rgba(42, 48, 112, 0.75);
+    clip-path: polygon(51% 0, 57% 0, 45% 50%, 57% 100%, 51% 100%, 39% 50%);
+    transform: translate(46px, 0);
+  }
+  /* złoty szewron na krawędzi zdjęcia */
+  .chevron-gold {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, #F5B13D, #E89A2B);
+    clip-path: polygon(51% 0, 57% 0, 45% 50%, 57% 100%, 51% 100%, 39% 50%);
+  }
+  /* pozioma półprzezroczysta banda pod tekstem (przechodzi nad zdjęciem) */
+  .band {
+    position: absolute; left: 0; right: 0;
+    top: 292px; height: 340px;
+    background: rgba(26, 31, 92, 0.78);
+  }
+  .text {
+    position: absolute;
+    left: 120px; top: 0; bottom: 0;
+    width: 780px;
+    display: flex; flex-direction: column; justify-content: center;
+    gap: 34px;
+    z-index: 5;
+  }
+  h1 {
+    color: #fff;
+    font-weight: 800;
+    font-size: 76px;
+    line-height: 1.12;
+    letter-spacing: -0.5px;
+  }
+  h2 {
+    color: #fff;
+    font-weight: 600;
+    font-size: 40px;
+    line-height: 1.3;
+  }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <div class="photo"></div>
+    <div class="chevron-shadow"></div>
+    <div class="chevron-gold"></div>
+    <div class="band"></div>
+    <div class="text">
+      <h1>{{TITLE}}</h1>
+      <h2>{{SUBTITLE}}</h2>
+    </div>
+  </div>
+</body>
+</html>

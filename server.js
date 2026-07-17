@@ -701,8 +701,22 @@ ETAP 2 — PISANIE:
 - frontmatter IDENTYCZNY ze schematem kolekcji (te same pola co istniejące pliki; kategorie/tagi wybierz z już używanych);
 - zapisz plik jako ${base}/<slug-z-tytulu>.md (slug: małe litery, bez polskich znaków, myślniki).
 
-NIE uruchamiaj deployu ani gita — deploy zrobi system po Tobie.
+${coverStep(site)}NIE uruchamiaj deployu ani gita — deploy zrobi system po Tobie.
 Na końcu wypisz dokładnie jedną linię: CREATED: <względna ścieżka pliku>.`;
+}
+
+// jeśli strona ma szablon okładek — Claude generuje okładkę po napisaniu tekstu
+function coverStep(site) {
+  const tplName = site.name.replace(/[\\/]/g, '_') + '.html';
+  const tpl = path.join(__dirname, 'covers', tplName);
+  if (!fs.existsSync(tpl)) return '';
+  return `
+ETAP 3 — OKŁADKA (ta strona ma szablon okładek — wygeneruj ją PO zapisaniu artykułu):
+- ułóż krótki, chwytliwy tytuł okładkowy (3-7 słów; pełny tytuł artykułu bywa za długi) i podtytuł (1 zdanie);
+- ułóż po angielsku prompt na TEMATYCZNE zdjęcie stockowe (professional editorial stock photo, bez tekstu/logo/watermarków) pasujące do artykułu;
+- uruchom (Bash): node "${path.join(__dirname, 'covers', 'make-cover.mjs').replace(/\\/g, '/')}" --template "${tpl.replace(/\\/g, '/')}" --title "<tytuł okładkowy>" --subtitle "<podtytuł>" --photo-prompt "<prompt en>" --out "<katalog-projektu>/public/blog/<slug>.jpg"
+- dopisz do frontmattera artykułu pola obrazka DOKŁADNIE wg schematu innych plików kolekcji (np. image: "/blog/<slug>.jpg" + imageAlt: "..."; jeśli kolekcja używa innych nazw pól — użyj ich).
+`;
 }
 
 app.post('/api/ai/write', wrap(async (req, res) => {
