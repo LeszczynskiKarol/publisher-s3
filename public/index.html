@@ -78,6 +78,7 @@
           <div class="ai-row">
             <input type="text" id="ai-topic" placeholder="Temat artykułu (opcjonalnie — możesz też pozwolić AI wybrać)">
             <button id="ai-write-btn" class="primary-btn" title="Claude (Opus 4.8, 1M) analizuje stronę + research i pisze artykuł na podany temat">✍️ Napisz (AI)</button>
+            <button id="ai-queue-add-btn" class="secondary-btn" title="Dodaj wpisany temat do kolejki autobloga (bez pisania teraz)">➕ Do kolejki</button>
             <button id="ai-propose-btn" class="secondary-btn" title="AI proponuje tematy na bazie treści strony, danych GSC/GA i researchu w sieci">💡 Zaproponuj tematy</button>
             <button id="ai-free-btn" class="secondary-btn" title="Pełna wolna ręka: AI sam dobiera temat i pisze">🎲 Wolna ręka</button>
             <label class="ai-deploy-check" title="Po napisaniu artykułu automatycznie uruchom deploy.sh">
@@ -85,6 +86,25 @@
             </label>
           </div>
           <div id="ai-proposals" class="ai-proposals hidden"></div>
+          <div class="ab-box">
+            <div class="ab-row">
+              <label class="ai-deploy-check"><input type="checkbox" id="ab-enabled"> <strong>Autoblog</strong></label>
+              <select id="ab-cadence" class="ab-select">
+                <option value="1">1×/tydzień</option>
+                <option value="2">2×/tydzień</option>
+                <option value="0.5">co 2 tygodnie</option>
+              </select>
+              <select id="ab-tier" class="ab-select">
+                <option value="B">tier B — auto-deploy</option>
+                <option value="A">tier A — bez deployu (czeka na Ciebie)</option>
+              </select>
+              <label class="ai-deploy-check" title="Gdy kolejka pusta, Claude sam dobiera temat"><input type="checkbox" id="ab-fallback" checked> wolna ręka przy pustej kolejce</label>
+              <span id="ab-next" class="count-label"></span>
+              <button id="ab-queue-btn" class="secondary-btn">Kolejka <span id="ab-queue-count"></span></button>
+              <label class="ai-deploy-check ab-global" title="Wstrzymuje autoblog na WSZYSTKICH stronach"><input type="checkbox" id="ab-paused"> ⏸ pauza globalna</label>
+            </div>
+            <div id="ab-queue" class="ai-proposals hidden"></div>
+          </div>
         </div>
         <div class="toolbar-row">
           <span id="files-count" class="count-label"></span>

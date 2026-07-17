@@ -37,6 +37,31 @@ async function initDb() {
       hidden boolean NOT NULL DEFAULT false,
       scanned_at timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS topic_queue (
+      id serial PRIMARY KEY,
+      site_id int NOT NULL,
+      topic text NOT NULL,
+      why text,
+      zrodlo text,
+      biblioteka text,
+      status text NOT NULL DEFAULT 'proposed',  -- proposed|accepted|writing|published|rejected|failed
+      file_rel text,
+      url text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      published_at timestamptz
+    );
+    CREATE TABLE IF NOT EXISTS autoblog (
+      site_id int PRIMARY KEY,
+      enabled boolean NOT NULL DEFAULT false,
+      cadence real NOT NULL DEFAULT 1,          -- artykułów na tydzień
+      tier text NOT NULL DEFAULT 'B',           -- B = auto-deploy, A = bez deployu (czeka na Ciebie)
+      fallback_free boolean NOT NULL DEFAULT true,
+      next_run timestamptz,
+      last_run timestamptz
+    );
+    CREATE TABLE IF NOT EXISTS settings (k text PRIMARY KEY, v text NOT NULL);
+    INSERT INTO settings (k, v) VALUES ('autoblog_paused', 'false'), ('autoblog_daily_max', '2')
+      ON CONFLICT DO NOTHING;
   `);
 }
 
@@ -450,29 +475,188 @@ WYNIK: wypisz WYŁĄCZNIE czysty JSON (bez markdown, bez komentarzy):
 Pole "biblioteka" ustaw na nazwę kolekcji, jeśli biblioteka ma źródła przydatne DO TEGO tematu (nawet gdy pomysł przyszedł z GSC/web) — to sygnał, że artykuł będzie miał głębokie pokrycie źródłowe. Dokładnie 5 pozycji, tematy po polsku.`;
   const job = await launchClaudeJob(site, prompt, {
     label: 'Propozycje tematów',
-    onDone: (j, code) => {
+    onDone: async (j, code) => {
       if (code !== 0) return;
       try {
         const m = (j.claudeResult || '').match(/\[[\s\S]*\]/);
         j.result = { proposals: JSON.parse(m[0]) };
+        for (const p of j.result.proposals) {
+          await db.query(
+            `INSERT INTO topic_queue (site_id, topic, why, zrodlo, biblioteka) VALUES ($1,$2,$3,$4,$5)`,
+            [site.id, p.temat, p.uzasadnienie || null, p.zrodlo || null, p.biblioteka || null]);
+        }
       } catch { j.result = { error: 'nie udało się sparsować propozycji', raw: (j.claudeResult || '').slice(0, 2000) }; }
     },
   });
   res.json({ ok: true, job: job.id });
 }));
 
-// tryb "napisz artykuł": temat z góry ALBO wolna ręka; opcjonalny auto-deploy
-app.post('/api/ai/write', wrap(async (req, res) => {
-  const site = await siteById(req.body.site);
-  const { base, mode = 'topic', topic, autodeploy = true } = req.body;
-  if (!base) return res.status(400).json({ error: 'brak base' });
-  if (mode === 'topic' && !topic) return res.status(400).json({ error: 'brak tematu' });
+// ── kolejka tematów ─────────────────────────────────────────────────────────
+app.get('/api/queue', wrap(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT * FROM topic_queue WHERE site_id=$1 AND status NOT IN ('rejected') ORDER BY
+     CASE status WHEN 'writing' THEN 0 WHEN 'accepted' THEN 1 WHEN 'proposed' THEN 2 ELSE 3 END, created_at DESC LIMIT 60`,
+    [req.query.site]);
+  res.json({ queue: rows });
+}));
 
+app.post('/api/queue', wrap(async (req, res) => {
+  const { site: siteId, topic, status = 'accepted' } = req.body;
+  if (!topic) return res.status(400).json({ error: 'brak tematu' });
+  await siteById(siteId);
+  await db.query('INSERT INTO topic_queue (site_id, topic, zrodlo, status) VALUES ($1,$2,$3,$4)',
+    [siteId, topic.trim(), 'manual', status]);
+  res.json({ ok: true });
+}));
+
+app.post('/api/queue/:id', wrap(async (req, res) => {
+  const { status } = req.body;
+  if (!['accepted', 'rejected', 'proposed'].includes(status)) return res.status(400).json({ error: 'zły status' });
+  await db.query('UPDATE topic_queue SET status=$1 WHERE id=$2', [status, req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ── autoblog: konfiguracja + scheduler ──────────────────────────────────────
+const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
+const ses = new SESClient({ region: process.env.SES_REGION || 'eu-central-1' });
+
+async function sendDigest(subject, body) {
+  if (!process.env.ALERT_EMAIL) return;
+  try {
+    await ses.send(new SendEmailCommand({
+      Source: process.env.SES_FROM,
+      Destination: { ToAddresses: [process.env.ALERT_EMAIL] },
+      Message: {
+        Subject: { Data: `[publisher] ${subject}`, Charset: 'UTF-8' },
+        Body: { Text: { Data: body, Charset: 'UTF-8' } },
+      },
+    }));
+  } catch (e) { console.error('SES:', e.message); }
+}
+
+const getSetting = async (k) => (await db.query('SELECT v FROM settings WHERE k=$1', [k])).rows[0]?.v;
+const setSetting = (k, v) => db.query(
+  'INSERT INTO settings (k,v) VALUES ($1,$2) ON CONFLICT (k) DO UPDATE SET v=$2', [k, String(v)]);
+
+// losowy termin: za `days` dni (±20%), o losowej godzinie 8-20
+function nextRunAfter(days) {
+  const jitter = 0.8 + Math.random() * 0.4;
+  const d = new Date(Date.now() + days * jitter * 86400000);
+  d.setHours(8 + Math.floor(Math.random() * 12), Math.floor(Math.random() * 60), 0, 0);
+  return d;
+}
+
+app.get('/api/autoblog', wrap(async (req, res) => {
+  const { rows } = await db.query(`
+    SELECT a.*, s.name, s.site_url,
+      (SELECT count(*)::int FROM topic_queue q WHERE q.site_id=a.site_id AND q.status='accepted') AS queued,
+      (SELECT count(*)::int FROM topic_queue q WHERE q.site_id=a.site_id AND q.status='proposed') AS proposed
+    FROM autoblog a JOIN astro_sites s ON s.id=a.site_id ORDER BY s.name`);
+  res.json({
+    paused: (await getSetting('autoblog_paused')) === 'true',
+    dailyMax: parseInt(await getSetting('autoblog_daily_max'), 10) || 2,
+    sites: rows,
+  });
+}));
+
+app.post('/api/autoblog', wrap(async (req, res) => {
+  const { site: siteId, enabled, cadence = 1, tier = 'B', fallback_free = true } = req.body;
+  await siteById(siteId);
+  await db.query(`
+    INSERT INTO autoblog (site_id, enabled, cadence, tier, fallback_free, next_run)
+    VALUES ($1,$2,$3,$4,$5, CASE WHEN $2 THEN now() + interval '1 hour' ELSE NULL END)
+    ON CONFLICT (site_id) DO UPDATE SET enabled=$2, cadence=$3, tier=$4, fallback_free=$5,
+      next_run = CASE WHEN $2 AND autoblog.next_run IS NULL THEN now() + interval '1 hour' ELSE autoblog.next_run END`,
+    [siteId, !!enabled, cadence, tier, !!fallback_free]);
+  res.json({ ok: true });
+}));
+
+app.post('/api/autoblog/pause', wrap(async (req, res) => {
+  await setSetting('autoblog_paused', !!req.body.paused);
+  res.json({ ok: true });
+}));
+
+function firstBlogBase(site) {
+  const cols = typeof site.collections === 'string' ? JSON.parse(site.collections) : (site.collections || []);
+  const blog = cols.find((c) => /blog/i.test(c.name)) || cols[0];
+  return blog?.base || null;
+}
+
+async function autoblogTick() {
+  try {
+    if ((await getSetting('autoblog_paused')) === 'true') return;
+    const h = new Date().getHours();
+    if (h < 8 || h >= 21) return;
+    const dailyMax = parseInt(await getSetting('autoblog_daily_max'), 10) || 2;
+    const { rows: [today] } = await db.query(
+      `SELECT count(*)::int n FROM topic_queue WHERE published_at::date = now()::date`);
+    if (today.n >= dailyMax) return;
+    if ([...jobs.values()].some((j) => j.autoblog && j.status === 'running')) return;
+
+    const { rows } = await db.query(`
+      SELECT a.*, s.* , s.id AS sid FROM autoblog a JOIN astro_sites s ON s.id=a.site_id
+      WHERE a.enabled AND a.next_run <= now() ORDER BY a.next_run LIMIT 1`);
+    const row = rows[0];
+    if (!row) return;
+    const site = { id: row.sid, dir: row.dir, name: row.name, site_url: row.site_url, has_deploy: row.has_deploy, collections: row.collections };
+    const base = firstBlogBase(site);
+    if (!base) {
+      await db.query('UPDATE autoblog SET next_run=$1 WHERE site_id=$2', [nextRunAfter(7), site.id]);
+      return;
+    }
+    const { rows: topics } = await db.query(
+      `SELECT * FROM topic_queue WHERE site_id=$1 AND status='accepted' ORDER BY created_at LIMIT 1`, [site.id]);
+    const topicRow = topics[0];
+    if (!topicRow && !row.fallback_free) {
+      await sendDigest(`⚠ ${site.name}: pusta kolejka`,
+        `Autoblog dla ${site.name} nie ma zaakceptowanych tematów, a wolna ręka jest wyłączona.\nZaakceptuj tematy w https://publish.torweb.pl albo włącz fallback.\nNastępna próba jutro.`);
+      await db.query('UPDATE autoblog SET next_run=now() + interval \'1 day\' WHERE site_id=$1', [site.id]);
+      return;
+    }
+    const mode = topicRow ? 'topic' : 'free';
+    if (topicRow) await db.query(`UPDATE topic_queue SET status='writing' WHERE id=$1`, [topicRow.id]);
+    console.log(`[autoblog] start: ${site.name} (${mode}${topicRow ? ': ' + topicRow.topic : ''})`);
+
+    const job = await launchClaudeJob(site, buildWritePrompt(site, base, mode, topicRow?.topic), {
+      label: `Autoblog${mode === 'free' ? ' (wolna ręka)' : ''}`,
+      andDeploy: row.tier === 'B' && site.has_deploy,
+      onDone: async (j, code) => {
+        const created = (j.claudeResult || '').match(/CREATED:\s*(\S+)/)?.[1] || null;
+        const slugPath = created ? created.replace(/^src\/content\//, '').replace(/\.(md|mdx)$/, '') : null;
+        const url = slugPath && site.site_url ? `${site.site_url}/${slugPath}/` : null;
+        if (code === 0) {
+          if (topicRow) await db.query(
+            `UPDATE topic_queue SET status='published', published_at=now(), file_rel=$1, url=$2 WHERE id=$3`,
+            [created, url, topicRow.id]);
+          else await db.query(
+            `INSERT INTO topic_queue (site_id, topic, zrodlo, status, file_rel, url, published_at)
+             VALUES ($1,$2,'wolna-reka','published',$3,$4,now())`,
+            [site.id, `(wolna ręka) ${created || '?'}`, created, url]);
+          await db.query('UPDATE autoblog SET last_run=now(), next_run=$1 WHERE site_id=$2',
+            [nextRunAfter(7 / row.cadence), site.id]);
+          await sendDigest(`✍ ${site.name}: nowy artykuł`,
+            `Strona: ${site.name}\nTemat: ${topicRow ? topicRow.topic : 'wolna ręka'}\nPlik: ${created || '?'}\nURL: ${url || '?'}\n` +
+            `Deploy: ${row.tier === 'B' && site.has_deploy ? 'wykonany automatycznie' : 'NIE (tier A) — zdeployuj z publishera'}\n\nhttps://publish.torweb.pl`);
+        } else {
+          if (topicRow) await db.query(`UPDATE topic_queue SET status='accepted' WHERE id=$1`, [topicRow.id]);
+          await db.query('UPDATE autoblog SET next_run=now() + interval \'1 day\' WHERE site_id=$1', [site.id]);
+          await sendDigest(`✗ ${site.name}: autoblog nieudany`,
+            `Job padł (exit != 0). Temat wrócił do kolejki, następna próba jutro.\nOstatnie linie logu:\n${j.log.slice(-12).join('\n')}`);
+        }
+      },
+    });
+    job.autoblog = true;
+  } catch (e) { console.error('autoblogTick:', e.message); }
+}
+setInterval(autoblogTick, 10 * 60 * 1000);
+
+// tryb "napisz artykuł": temat z góry ALBO wolna ręka; opcjonalny auto-deploy
+function buildWritePrompt(site, base, mode, topic) {
   const topicPart = mode === 'free'
     ? `TEMAT: dobierz SAM — masz pełną wolną rękę. Przeanalizuj istniejące artykuły w ${base}, dane GSC/GA4 domeny ${apexOf(site.site_url)} (procedura w globalnym CLAUDE.md), pokrycie biblioteki źródeł (patrz ETAP 1b — tematy głęboko pokryte biblioteką preferuj przy porównywalnym potencjale) oraz zrób web research (WebSearch), i wybierz temat o największym potencjale, który uzupełnia luki strony. W logu uzasadnij wybór jednym akapitem.`
     : `TEMAT artykułu (podany z góry): "${topic}"`;
 
-  const prompt = `${aiContext(site, base)}
+  return `${aiContext(site, base)}
 
 ZADANIE: napisz JEDEN nowy, długi artykuł blogowy i zapisz go w kolekcji.
 
@@ -488,13 +672,20 @@ Artykuł ma łączyć oba ramiona: merytoryczny rdzeń ze źródeł biblioteczny
 ETAP 2 — PISANIE:
 - załaduj skill "tekst-merytoryczny-pl" (narzędzie Skill) i pisz zgodnie z jego regułami — to nadrzędne wytyczne stylu;
 - minimum 1500 słów, po polsku, konkretnie, z przykładami i danymi z researchu;
+- wpleć naturalnie 2-3 linki wewnętrzne do istniejących artykułów tej strony (ścieżki wg konwencji routingu strony, sprawdź w istniejących plikach jak linkują między sobą);
 - frontmatter IDENTYCZNY ze schematem kolekcji (te same pola co istniejące pliki; kategorie/tagi wybierz z już używanych);
 - zapisz plik jako ${base}/<slug-z-tytulu>.md (slug: małe litery, bez polskich znaków, myślniki).
 
 NIE uruchamiaj deployu ani gita — deploy zrobi system po Tobie.
 Na końcu wypisz dokładnie jedną linię: CREATED: <względna ścieżka pliku>.`;
+}
 
-  const job = await launchClaudeJob(site, prompt, {
+app.post('/api/ai/write', wrap(async (req, res) => {
+  const site = await siteById(req.body.site);
+  const { base, mode = 'topic', topic, autodeploy = true } = req.body;
+  if (!base) return res.status(400).json({ error: 'brak base' });
+  if (mode === 'topic' && !topic) return res.status(400).json({ error: 'brak tematu' });
+  const job = await launchClaudeJob(site, buildWritePrompt(site, base, mode, topic), {
     label: mode === 'free' ? 'Artykuł (wolna ręka)' : 'Artykuł (AI)',
     andDeploy: autodeploy && site.has_deploy,
   });

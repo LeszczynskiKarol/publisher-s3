@@ -311,3 +311,18 @@ input, textarea, select { font-family: inherit; }
 }
 .ai-prop-why { font-size: 12px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
 .ai-prop-go { flex-shrink: 0; padding: 7px 16px; }
+
+/* ═══ autoblog ═══ */
+.ab-box { margin-top: 12px; border-top: 1px dashed rgba(245, 158, 11, 0.3); padding-top: 10px; }
+.ab-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ab-select {
+  padding: 7px 10px; background: var(--bg-deep); border: 1px solid var(--border-soft);
+  border-radius: 8px; color: var(--text); font-size: 12px;
+}
+.ab-select:focus { outline: none; border-color: var(--accent); }
+.ab-global { margin-left: auto; color: var(--text-faint); }
+.q-status { flex-shrink: 0; width: 22px; text-align: center; font-size: 13px; }
+.q-published { opacity: 0.65; }
+.q-writing { border-color: rgba(245, 158, 11, 0.5); }
+.ai-prop a { color: var(--accent); text-decoration: none; }
+.ai-prop a:hover { text-decoration: underline; }

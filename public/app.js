@@ -100,8 +100,11 @@ function openSite(site) {
   if (site.site_url) { link.textContent = site.site_url.replace('https://', ''); link.href = site.site_url; link.classList.remove('hidden'); }
   else link.classList.add('hidden');
   $('#deploy-btn').title = site.has_deploy ? 'Uruchom deploy.sh' : 'Brak deploy.sh — odpali tylko npm run build';
+  $('#ai-proposals').classList.add('hidden');
+  $('#ab-queue').classList.add('hidden');
   renderCollectionTabs();
   showFiles();
+  loadAutoblog().catch(() => {});
 }
 
 function renderCollectionTabs() {
@@ -283,6 +286,15 @@ $('#ai-write-btn').addEventListener('click', async () => {
   startAiWrite('topic', topic);
 });
 
+$('#ai-queue-add-btn').addEventListener('click', async () => {
+  const topic = $('#ai-topic').value.trim();
+  if (!topic) { toast('Wpisz temat, który mam dodać do kolejki.', 'error'); return; }
+  await api('/api/queue', { method: 'POST', body: { site: state.site.id, topic } });
+  $('#ai-topic').value = '';
+  toast('Dodano do kolejki (zaakceptowany).', 'success');
+  loadAutoblog();
+});
+
 $('#ai-free-btn').addEventListener('click', () => {
   if (!confirm(`Wolna ręka na ${state.site.name}?\nClaude sam przeanalizuje stronę, GSC/GA i sieć, wybierze temat, napisze artykuł${$('#ai-autodeploy').checked ? ' i zrobi deploy' : ''}.`)) return;
   startAiWrite('free');
@@ -329,6 +341,79 @@ $('#ai-proposals').addEventListener('click', (e) => {
   const proposals = JSON.parse($('#ai-proposals').dataset.proposals || '[]');
   const p = proposals[+btn.dataset.i];
   if (p) startAiWrite('topic', p.temat);
+});
+
+// ── autoblog: konfiguracja + kolejka ────────────────────────────────────────
+async function loadAutoblog() {
+  const ab = await api('/api/autoblog');
+  $('#ab-paused').checked = ab.paused;
+  const cfg = ab.sites.find((s) => s.site_id === state.site.id);
+  $('#ab-enabled').checked = !!cfg?.enabled;
+  $('#ab-cadence').value = String(cfg?.cadence ?? 1);
+  $('#ab-tier').value = cfg?.tier || 'B';
+  $('#ab-fallback').checked = cfg ? cfg.fallback_free : true;
+  $('#ab-next').textContent = cfg?.enabled && cfg.next_run
+    ? `następny: ${new Date(cfg.next_run).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+    : '';
+  $('#ab-queue-count').textContent = cfg ? `(${cfg.queued}✓ ${cfg.proposed}?)` : '(0)';
+}
+
+async function saveAutoblog() {
+  await api('/api/autoblog', {
+    method: 'POST',
+    body: {
+      site: state.site.id,
+      enabled: $('#ab-enabled').checked,
+      cadence: parseFloat($('#ab-cadence').value),
+      tier: $('#ab-tier').value,
+      fallback_free: $('#ab-fallback').checked,
+    },
+  });
+  toast('Zapisano ustawienia autobloga.', 'success');
+  loadAutoblog();
+}
+
+for (const id of ['ab-enabled', 'ab-cadence', 'ab-tier', 'ab-fallback']) {
+  document.getElementById(id).addEventListener('change', saveAutoblog);
+}
+
+$('#ab-paused').addEventListener('change', async (e) => {
+  await api('/api/autoblog/pause', { method: 'POST', body: { paused: e.target.checked } });
+  toast(e.target.checked ? 'Autoblog wstrzymany globalnie.' : 'Autoblog wznowiony.', 'success');
+});
+
+const STATUS_LABEL = { proposed: '?', accepted: '✓', writing: '✍', published: '🌐', failed: '✗' };
+
+async function loadQueue() {
+  const { queue } = await api(`/api/queue?site=${state.site.id}`);
+  const box = $('#ab-queue');
+  box.classList.remove('hidden');
+  box.innerHTML = queue.map((q) => `
+    <div class="ai-prop q-${q.status}">
+      <span class="q-status" title="${q.status}">${STATUS_LABEL[q.status] || '·'}</span>
+      <div class="ai-prop-body">
+        <div class="ai-prop-title">${q.url ? `<a href="${esc(q.url)}" target="_blank" rel="noopener">${esc(q.topic)}</a>` : esc(q.topic)}
+          ${q.zrodlo ? `<span class="ai-prop-src">${esc(q.zrodlo)}</span>` : ''}
+          ${q.biblioteka && q.biblioteka !== 'brak' ? `<span class="ai-prop-src">📚</span>` : ''}
+        </div>
+        ${q.why ? `<div class="ai-prop-why">${esc(q.why)}</div>` : ''}
+      </div>
+      ${q.status === 'proposed' ? `<button class="secondary-btn" data-q="${q.id}" data-st="accepted">Akceptuj</button>` : ''}
+      ${['proposed', 'accepted'].includes(q.status) ? `<button class="ghost-btn" data-q="${q.id}" data-st="rejected">✕</button>` : ''}
+    </div>`).join('') || '<div class="ai-prop-why">Kolejka pusta — użyj „Zaproponuj tematy" albo dodaj temat ręcznie (wpisz i „Do kolejki").</div>';
+}
+
+$('#ab-queue-btn').addEventListener('click', () => {
+  if ($('#ab-queue').classList.contains('hidden')) loadQueue();
+  else $('#ab-queue').classList.add('hidden');
+});
+
+$('#ab-queue').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-q]');
+  if (!btn) return;
+  await api(`/api/queue/${btn.dataset.q}`, { method: 'POST', body: { status: btn.dataset.st } });
+  loadQueue();
+  loadAutoblog();
 });
 
 // ── init ────────────────────────────────────────────────────────────────────

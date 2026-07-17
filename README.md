@@ -42,6 +42,20 @@ styl strony, research faktów w sieci), a styl pilnowany jest skillem
 `tekst-merytoryczny-pl`. Checkbox **auto-deploy** dokleja `./deploy.sh` po
 udanym pisaniu — całość od tematu do publikacji na jeden klik.
 
+## Autoblog (scheduler wbudowany w publishera)
+
+Per strona: włącz/wyłącz, kadencja (2×/tydz → co 2 tyg.), tier
+(**B** = auto-deploy po napisaniu, **A** = artykuł czeka na ręczny deploy),
+fallback „wolna ręka" przy pustej kolejce. Do tego **kolejka tematów**:
+propozycje AI trafiają jako `proposed` → akceptujesz/odrzucasz w GUI
+(albo dodajesz własne „➕ Do kolejki") → scheduler pisze po jednym.
+
+Bezpieczniki: globalna pauza, limit dzienny (domyślnie 2 artykuły/dobę
+łącznie), okno publikacji 8-21 z losową godziną i jitterem terminu (bez
+footprintu „wszystko o północy"), jeden job naraz, nieudany temat wraca
+do kolejki z ponowieniem za dobę. Po każdej publikacji **digest mailem
+(SES)**: strona, temat, plik, URL, status deployu.
+
 ## API pod automatyzację (autoblogging)
 
 Nagłówek `x-api-key` zamiast sesji. Przyszły autoblogger (cron + Claude):
