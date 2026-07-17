@@ -246,7 +246,22 @@ function parseFrontmatter(txt) {
     const mm = m[1].match(new RegExp(`^${k}:\\s*(.+)$`, 'm'));
     return mm ? mm[1].trim().replace(/^["']|["']$/g, '') : null;
   };
-  return { title: get('title'), description: get('description'), pubDate: get('pubDate') || get('date'), draft: get('draft') };
+  return {
+    title: get('title'),
+    description: get('description'),
+    pubDate: get('pubDate') || get('publishDate') || get('pubDatetime') || get('date'),
+    draft: get('draft'),
+  };
+}
+
+// zgadnij publiczny URL artykułu: src/content/<kolekcja>/<slug>.md →
+// /<kolekcja>/<slug>/ jeśli istnieje src/pages/<kolekcja>/, inaczej /<slug>/
+function urlFor(site, base, rel) {
+  if (!site.site_url) return null;
+  const colName = base.replace(/^src\/content\/?/, '').split('/')[0];
+  const slugPath = rel.replace(/^src\/(content|pages)\//, '').replace(/^[^/]+\//, '').replace(/\.(md|mdx)$/, '');
+  const hasRoute = colName && fs.existsSync(path.join(site.dir, 'src', 'pages', colName));
+  return `${site.site_url}/${hasRoute ? colName + '/' : ''}${slugPath}/`;
 }
 
 app.get('/api/content', wrap(async (req, res) => {
@@ -265,14 +280,16 @@ app.get('/api/content', wrap(async (req, res) => {
         const st = await fsp.stat(abs);
         const head = (await fsp.readFile(abs, 'utf8')).slice(0, 3000);
         const fm = parseFrontmatter(head);
+        const fileRel = `${base}/${rel ? rel + '/' : ''}${e.name}`.replace(/\\/g, '/');
         files.push({
-          rel: `${base}/${rel ? rel + '/' : ''}${e.name}`.replace(/\\/g, '/'),
+          rel: fileRel,
           name: e.name,
           title: fm.title,
           pubDate: fm.pubDate,
           draft: fm.draft === 'true',
           sizeKb: Math.round(st.size / 1024),
           mtime: st.mtime,
+          url: urlFor(site, base, fileRel),
         });
       }
     }
@@ -348,7 +365,7 @@ app.post('/api/new', wrap(async (req, res) => {
           .replace(/^title:.*$/m, `title: "${t}"`)
           .replace(/^metaTitle:.*$/m, `metaTitle: "${t}"`)
           .replace(/^(description|excerpt|metaDescription):.*$/gm, `$1: "${d}"`)
-          .replace(/^(pubDate|date):.*$/gm, `$1: ${new Date().toISOString().slice(0, 10)}`)
+          .replace(/^(pubDate|publishDate|pubDatetime|date):.*$/gm, `$1: ${new Date().toISOString().slice(0, 10)}`)
           .replace(/^draft:.*$/m, 'draft: false');
       }
     }

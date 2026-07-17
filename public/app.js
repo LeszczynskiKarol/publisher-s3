@@ -138,7 +138,7 @@ async function showFiles() {
         <td class="mono-cell">${esc(f.name)}</td>
         <td class="mono-cell">${esc(f.pubDate || '')}</td>
         <td class="num">${f.sizeKb}</td>
-        <td class="mono-cell">edytuj →</td>
+        <td class="mono-cell">${f.url ? `<a href="${esc(f.url)}" target="_blank" rel="noopener" title="Otwórz na stronie">otwórz ↗</a> · ` : ''}edytuj →</td>
       </tr>`).join('') || '<tr><td colspan="5">Pusto.</td></tr>';
   } catch (err) {
     $('#files-tbody').innerHTML = `<tr><td colspan="5">${esc(err.message)}</td></tr>`;
@@ -146,6 +146,7 @@ async function showFiles() {
 }
 
 $('#files-tbody').addEventListener('click', (e) => {
+  if (e.target.closest('a')) return; // link "otwórz ↗" nie otwiera edytora
   const tr = e.target.closest('tr[data-rel]');
   if (tr) openEditor(tr.dataset.rel);
 });
