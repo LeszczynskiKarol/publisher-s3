@@ -1,3 +1,4 @@
 node_modules/
 .env
 frpc.toml
+.backups/
