@@ -1,45 +1,45 @@
-# Publisher
+# Publisher — content manager frontów Astro
 
-Publikator artykułów na statyczne satelity S3 — jeden formularz zamiast ręcznej
-roboty. Publicznie (za hasłem) pod **https://publish.torweb.pl**, lokalnie
-`http://localhost:4900`.
+CMS nad źródłami wszystkich stron Astro (satelity + fronty aplikacji) — zamiast
+edycji plików ręcznie w edytorze i deployów z terminala. Publicznie (za hasłem)
+pod **https://publish.torweb.pl**, lokalnie `http://localhost:4900`.
 
-## Co robi jedna publikacja
+## Jak działa
 
-1. renderuje artykuł (markdown → HTML albo gotowy HTML) w szablonie strony
-2. wgrywa `blog/<slug>/index.html` do bucketa S3 domeny
-3. dopisuje URL do sitemap (`sitemap-0.xml` / konfigurowalny klucz)
-4. invaliduje dystrybucje CloudFront domeny (www + apex)
-5. pinguje Google Indexing API (`URL_UPDATED`) — JWT service account
-   podpisywany czystym node `crypto`, bez zewnętrznych bibliotek
+**Auto-discovery**: skan dysku (`D:\*/astro.config.*` i `D:\*/frontend/astro.config.*`)
+znajduje wszystkie projekty Astro; z każdego czyta `site:` (domena), remote origin
+(GitHub), obecność `deploy.sh` i kolekcje treści (`src/content/*` + markdown
+w `src/pages`). Przycisk „Skanuj" wykrywa nowe projekty automatycznie —
+dodanie kolejnej strony do CMS-a = po prostu położenie jej na dysku.
 
-Każdy krok raportowany osobno (✓/✗) i zapisywany w historii (Postgres).
+**Content**: lista plików `.md/.mdx` per kolekcja (tytuł/data/draft z frontmattera),
+edycja surowego pliku (frontmatter + treść) z Ctrl+S, usuwanie, tworzenie nowych —
+frontmatter nowego artykułu jest **dziedziczony z najnowszego pliku kolekcji**
+(każda strona ma swój schemat: description vs excerpt/metaTitle itd.), więc wpis
+od razu pasuje do danej strony. Przed każdym zapisem/usunięciem poprzednia wersja
+ląduje w `.backups/` (plus historia git projektu).
 
-## Szablony per domena
-
-Szablon = pełny HTML strony artykułu z placeholderami `{{TITLE}}`,
-`{{DESCRIPTION}}`, `{{CONTENT}}`, `{{DATE}}`, `{{CANONICAL}}`, `{{SLUG}}`.
-Przy pierwszej konfiguracji GUI podpowiada HTML najnowszego artykułu z bucketa —
-wystarczy podmienić treść na placeholdery. Dzięki temu nowe wpisy wyglądają
-identycznie jak reszta strony (satelity budowane w Astro).
+**Deploy**: przycisk uruchamia `./deploy.sh` projektu (build → `aws s3 sync` →
+invalidacja CloudFront) przez git-basha, z logiem na żywo w GUI. Projekty bez
+`deploy.sh` dostają fallback `npm run build` (z ostrzeżeniem).
 
 ## API pod automatyzację (autoblogging)
 
-Wszystkie endpointy przyjmują nagłówek `x-api-key` zamiast sesji cookie:
+Nagłówek `x-api-key` zamiast sesji. Przyszły autoblogger (cron + Claude):
 
 ```
-POST /api/publish
-{ "domain": "www.przyklad.pl", "title": "…", "description": "…",
-  "content": "## markdown…", "format": "markdown", "slug": "opcjonalny" }
+POST /api/new    { site, base, title, description, slug?, content? }
+POST /api/file   { site, rel, content }          # pełna treść artykułu
+POST /api/deploy { site }                        # → job id
+GET  /api/job/:id                                # status + log
 ```
-
-Zaprojektowane pod podpięcie Claude'a jako autobloggera (cron → generacja
-treści → POST /api/publish).
 
 ## Uruchomienie
 
 ```
 npm install
-cp .env.example .env     # hasła + ścieżka do klucza SA Google
-node server.js
+cp .env.example .env
+node server.js       # przy starcie robi pełny skan dysku
 ```
+
+Stan (lista projektów) w Postgres `publisher`.
