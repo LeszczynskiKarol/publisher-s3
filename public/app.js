@@ -312,7 +312,7 @@ $('#ai-propose-btn').addEventListener('click', async () => {
           result.proposals.map((p, i) => `
           <div class="ai-prop">
             <div class="ai-prop-body">
-              <div class="ai-prop-title">${esc(p.temat)} <span class="ai-prop-src">${esc(p.zrodlo || '')}</span></div>
+              <div class="ai-prop-title">${esc(p.temat)} <span class="ai-prop-src">${esc(p.zrodlo || '')}</span>${p.biblioteka && p.biblioteka !== 'brak' ? `<span class="ai-prop-src" title="biblioteka ma źródła do tego tematu: ${esc(p.biblioteka)}">📚 ${esc(p.biblioteka)}</span>` : ''}</div>
               <div class="ai-prop-why">${esc(p.uzasadnienie || '')}</div>
             </div>
             <button class="primary-btn ai-prop-go" data-i="${i}">Pisz</button>

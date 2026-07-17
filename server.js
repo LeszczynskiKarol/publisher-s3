@@ -439,14 +439,15 @@ app.post('/api/ai/propose', wrap(async (req, res) => {
 
 ZADANIE: zaproponuj 5 tematów na NOWY artykuł blogowy dla tej strony. NICZEGO nie zapisuj na dysku.
 
-Wykonaj analizę (wszystkie trzy źródła):
+Wykonaj analizę (wszystkie cztery źródła — są komplementarne, żadne nie zastępuje innego):
 1. Przeczytaj tytuły i tematykę istniejących artykułów w ${base} — nowe tematy nie mogą ich dublować, mają uzupełniać luki.
 2. Pobierz dane Google Search Console i GA4 dla domeny ${apexOf(site.site_url)} zgodnie z procedurą z Twojego globalnego CLAUDE.md (sekcja "Google Analytics (GA4) & Search Console"). Szukaj zapytań z wyświetleniami, na które strona nie ma dedykowanego artykułu, oraz artykułów z potencjałem na temat pokrewny.
-3. Zrób research w sieci (WebSearch): czego aktualnie szukają ludzie w tej tematyce, jakie tematy pokrywa konkurencja, czego brakuje.
+3. BIBLIOTEKA ŹRÓDEŁ: załaduj skill "biblioteka" (narzędzie Skill). Sprawdź \`python library.py stats\` (z D:\\copy-library\\pipeline), czy któraś kolekcja pasuje tematycznie do tej strony. Jeśli tak — przejrzyj \`python library.py clusters <kolekcja>\` i wygeneruj część propozycji z tego, co biblioteka FAKTYCZNIE głęboko pokrywa (motywy, spory, liczby z wielu źródeł) — takie tematy dostaną najlepsze, źródłowe artykuły. NIE rób żniw (harvest) — tylko odczyt.
+4. Zrób research w sieci (WebSearch): czego aktualnie szukają ludzie w tej tematyce, jakie tematy pokrywa konkurencja, czego brakuje.
 
 WYNIK: wypisz WYŁĄCZNIE czysty JSON (bez markdown, bez komentarzy):
-[{"temat":"...","uzasadnienie":"1-2 zdania dlaczego ten temat","zrodlo":"gsc|ga|web|content-gap"}]
-Dokładnie 5 pozycji, tematy po polsku.`;
+[{"temat":"...","uzasadnienie":"1-2 zdania dlaczego ten temat","zrodlo":"gsc|ga|web|content-gap|biblioteka","biblioteka":"<nazwa-kolekcji albo brak>"}]
+Pole "biblioteka" ustaw na nazwę kolekcji, jeśli biblioteka ma źródła przydatne DO TEGO tematu (nawet gdy pomysł przyszedł z GSC/web) — to sygnał, że artykuł będzie miał głębokie pokrycie źródłowe. Dokładnie 5 pozycji, tematy po polsku.`;
   const job = await launchClaudeJob(site, prompt, {
     label: 'Propozycje tematów',
     onDone: (j, code) => {
@@ -468,7 +469,7 @@ app.post('/api/ai/write', wrap(async (req, res) => {
   if (mode === 'topic' && !topic) return res.status(400).json({ error: 'brak tematu' });
 
   const topicPart = mode === 'free'
-    ? `TEMAT: dobierz SAM — masz pełną wolną rękę. Przeanalizuj istniejące artykuły w ${base}, dane GSC/GA4 domeny ${apexOf(site.site_url)} (procedura w globalnym CLAUDE.md) oraz zrób web research (WebSearch), i wybierz temat o największym potencjale, który uzupełnia luki strony. W logu uzasadnij wybór jednym akapitem.`
+    ? `TEMAT: dobierz SAM — masz pełną wolną rękę. Przeanalizuj istniejące artykuły w ${base}, dane GSC/GA4 domeny ${apexOf(site.site_url)} (procedura w globalnym CLAUDE.md), pokrycie biblioteki źródeł (patrz ETAP 1b — tematy głęboko pokryte biblioteką preferuj przy porównywalnym potencjale) oraz zrób web research (WebSearch), i wybierz temat o największym potencjale, który uzupełnia luki strony. W logu uzasadnij wybór jednym akapitem.`
     : `TEMAT artykułu (podany z góry): "${topic}"`;
 
   const prompt = `${aiContext(site, base)}
@@ -478,7 +479,11 @@ ZADANIE: napisz JEDEN nowy, długi artykuł blogowy i zapisz go w kolekcji.
 ETAP 1 — ANALIZA (obowiązkowa, zanim napiszesz choć zdanie):
 - przeczytaj 2-3 istniejące artykuły z ${base}: DOKŁADNY schemat frontmattera (wszystkie pola, format dat, kategorie/tagi w użyciu), styl, typową długość i strukturę nagłówków;
 - ${topicPart}
-- zrób rzetelny research (WebSearch): aktualne dane, liczby, fakty — artykuł ma być merytoryczny, nie lany.
+
+ETAP 1b — RESEARCH DWURAMIENNY (oba ramiona, równolegle — nie wybieraj jednego):
+a) BIBLIOTEKA ŹRÓDEŁ (głębia i wiarygodność): załaduj skill "biblioteka" (narzędzie Skill) i sprawdź \`python library.py stats\`, czy istnieje kolekcja pasująca do tematu. Jeśli TAK: wybierz źródła wg workflow skilla (\`library.py clusters\`, \`library.py top --cluster\`, \`search.py "fraza" --collection\` — po polsku z wariantami fleksyjnymi przez "or" i --lang pl, po angielsku osobno), przeczytaj pełne teksty 2-4 najtrafniejszych dokumentów (kolumna text_path) i wyciągnij z nich konkrety: liczby, badania, definicje, spory, cytaty (parafrazuj, cytuj źródło; strony PDF wg document_pages → "s. N"). NIE uruchamiaj żniw (harvest_*) — tylko odczyt istniejącej biblioteki. Jeśli kolekcji pasującej NIE ma — odnotuj to i pomiń to ramię (nie twórz nowej biblioteki).
+b) WEB (aktualność): WebSearch — bieżące dane, ceny, daty, zmiany przepisów, trendy. To ramię uzupełnia bibliotekę o świeżość, której statyczne źródła nie mają.
+Artykuł ma łączyć oba ramiona: merytoryczny rdzeń ze źródeł bibliotecznych (jeśli są) + aktualia z sieci.
 
 ETAP 2 — PISANIE:
 - załaduj skill "tekst-merytoryczny-pl" (narzędzie Skill) i pisz zgodnie z jego regułami — to nadrzędne wytyczne stylu;
