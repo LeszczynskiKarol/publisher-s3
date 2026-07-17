@@ -386,6 +386,14 @@ app.post('/api/deploy', wrap(async (req, res) => {
   res.json({ ok: true, job: id, mode: site.has_deploy ? 'deploy.sh' : 'npm run build (brak deploy.sh!)' });
 }));
 
+app.get('/api/jobs', wrap(async (req, res) => {
+  const list = [...jobs.values()]
+    .sort((a, b) => b.started - a.started)
+    .slice(0, 20)
+    .map((j) => ({ id: j.id, name: j.name, status: j.status, started: j.started, min: Math.round((Date.now() - j.started) / 60000) }));
+  res.json({ jobs: list });
+}));
+
 app.get('/api/job/:id', wrap(async (req, res) => {
   const job = jobs.get(parseInt(req.params.id, 10));
   if (!job) return res.status(404).json({ error: 'nie ma takiego joba' });

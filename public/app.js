@@ -261,6 +261,26 @@ async function pollJob() {
 
 $('#deploy-close').addEventListener('click', () => $('#deploy-panel').classList.add('hidden'));
 
+$('#jobs-btn').addEventListener('click', async () => {
+  const { jobs } = await api('/api/jobs');
+  if (!jobs.length) { toast('Brak jobów w tej sesji serwera.', ''); return; }
+  const box = $('#ai-proposals');
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="ai-prop-head">Procesy (kliknij, żeby otworzyć log):</div>' + jobs.map((j) => `
+    <div class="ai-prop row-clickable" data-job="${j.id}">
+      <span class="q-status">${j.status === 'running' ? '⏳' : j.status === 'done' ? '✓' : '✗'}</span>
+      <div class="ai-prop-body">
+        <div class="ai-prop-title">${esc(j.name)}</div>
+        <div class="ai-prop-why">${j.status === 'running' ? `trwa ${j.min} min` : j.status}</div>
+      </div>
+    </div>`).join('');
+});
+
+$('#ai-proposals').addEventListener('click', (e) => {
+  const row = e.target.closest('[data-job]');
+  if (row) watchJob(+row.dataset.job, 'Podgląd joba');
+});
+
 // ── AI (lokalny Claude: Opus 4.8, 1M) ───────────────────────────────────────
 function watchJob(jobId, title, { onResult } = {}) {
   state.job = jobId;
