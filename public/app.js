@@ -252,10 +252,13 @@ async function pollJob() {
     const j = await api(`/api/job/${state.job}`);
     $('#deploy-log').textContent = j.log.join('\n');
     $('#deploy-log').scrollTop = $('#deploy-log').scrollHeight;
-    if (j.status === 'running') setTimeout(pollJob, 1500);
-    else {
-      $('#deploy-title').textContent = j.status === 'done' ? `✓ Deploy OK: ${j.name}` : `✗ Deploy padł: ${j.name}`;
-      toast(j.status === 'done' ? 'Deploy zakończony.' : 'Deploy nieudany — sprawdź log.', j.status === 'done' ? 'success' : 'error');
+    if (j.status === 'running' || j.status === 'verifying') setTimeout(pollJob, 1500);
+    else if (j.status === 'unverified') {
+      $('#deploy-title').textContent = `⚠ Deploy poszedł, strona NIE potwierdzona live: ${j.name}`;
+      toast('Deploy się wykonał, ale URL nie odpowiada 200 — sprawdź log.', 'error');
+    } else {
+      $('#deploy-title').textContent = j.status === 'done' ? `✓ Deploy OK + live: ${j.name}` : `✗ Deploy padł: ${j.name}`;
+      toast(j.status === 'done' ? 'Deploy zakończony i potwierdzony live.' : 'Deploy nieudany — sprawdź log.', j.status === 'done' ? 'success' : 'error');
     }
   } catch { setTimeout(pollJob, 3000); }
 }
@@ -269,7 +272,7 @@ $('#jobs-btn').addEventListener('click', async () => {
   box.classList.remove('hidden');
   box.innerHTML = '<div class="ai-prop-head">Procesy (kliknij, żeby otworzyć log):</div>' + jobs.map((j) => `
     <div class="ai-prop row-clickable" data-job="${j.id}">
-      <span class="q-status">${j.status === 'running' ? '⏳' : j.status === 'done' ? '✓' : '✗'}</span>
+      <span class="q-status">${j.status === 'running' || j.status === 'verifying' ? '⏳' : j.status === 'done' ? '✓' : j.status === 'unverified' ? '⚠' : '✗'}</span>
       <div class="ai-prop-body">
         <div class="ai-prop-title">${esc(j.name)}</div>
         <div class="ai-prop-why">${j.status === 'running' ? `trwa ${j.min} min` : j.status}</div>
@@ -292,11 +295,13 @@ function watchJob(jobId, title, { onResult } = {}) {
       const j = await api(`/api/job/${jobId}`);
       $('#deploy-log').textContent = j.log.join('\n');
       $('#deploy-log').scrollTop = $('#deploy-log').scrollHeight;
-      if (j.status === 'running') return setTimeout(poll, 2500);
-      $('#deploy-title').textContent = (j.status === 'done' ? '✓ ' : '✗ ') + j.name;
-      toast(j.status === 'done' ? `${j.name} — gotowe.` : `${j.name} — błąd, sprawdź log.`, j.status === 'done' ? 'success' : 'error');
+      if (j.status === 'running' || j.status === 'verifying') return setTimeout(poll, 2500);
+      const icon = j.status === 'done' ? '✓ ' : j.status === 'unverified' ? '⚠ ' : '✗ ';
+      $('#deploy-title').textContent = icon + j.name;
+      if (j.status === 'unverified') toast(`${j.name} — deploy poszedł, ale strona nie potwierdzona live.`, 'error');
+      else toast(j.status === 'done' ? `${j.name} — gotowe i live.` : `${j.name} — błąd, sprawdź log.`, j.status === 'done' ? 'success' : 'error');
       if (j.status === 'done' && onResult) onResult(j.result);
-      if (j.status === 'done') showFiles();
+      if (j.status === 'done' || j.status === 'unverified') showFiles();
     } catch { setTimeout(poll, 4000); }
   })();
 }

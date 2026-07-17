@@ -264,6 +264,93 @@ function urlFor(site, base, rel) {
   return `${site.site_url}/${hasRoute ? colName + '/' : ''}${slugPath}/`;
 }
 
+// publiczny URL z samej ścieżki pliku (kolekcję wyprowadzamy z rel)
+function urlForRel(site, rel) {
+  const norm = String(rel).replace(/\\/g, '/');
+  const colName = norm.replace(/^src\/(content|pages)\//, '').split('/')[0];
+  return urlFor(site, `src/content/${colName}`, norm);
+}
+
+// najnowszy (wg mtime) artykuł w pierwszej kolekcji blogowej → jego URL.
+// Używane przy RĘCZNYM deployu, gdzie nie znamy konkretnego nowego wpisu.
+function newestPostUrl(site) {
+  const base = firstBlogBase(site);
+  if (!base || !site.site_url) return null;
+  let newest = null;
+  (function walk(d) {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(md|mdx)$/.test(e.name)) {
+        const mt = fs.statSync(p).mtimeMs;
+        if (!newest || mt > newest.mt) newest = { p, mt };
+      }
+    }
+  })(path.resolve(site.dir, base));
+  if (!newest) return null;
+  return urlForRel(site, path.relative(site.dir, newest.p).replace(/\\/g, '/'));
+}
+
+// poll URL-a aż odpowie 200 (CloudFront po invalidacji potrafi chwilę propagować)
+async function verifyLive(url, { tries = 20, intervalMs = 6000 } = {}) {
+  let last = 0;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000),
+        headers: { 'cache-control': 'no-cache', 'pragma': 'no-cache' },
+      });
+      last = r.status;
+      if (r.status === 200) return { ok: true, status: 200, attempts: i + 1 };
+    } catch { /* sieć/timeout — próbujemy dalej */ }
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { ok: false, status: last, attempts: tries };
+}
+
+// DOMKNIĘCIE E2E: po udanym deployu (exit 0) potwierdź, że strona ŻYJE pod swoim
+// adresem. Rozróżnia „deploy w ogóle nie wstał" (root != 200) od „wstał, ale URL
+// wpisu nie odpowiada" (zła heurystyka ścieżki albo trwa propagacja). Sam ustawia
+// finalny status joba: 'done' tylko gdy strona odpowiada 200.
+async function verifyDeployLive(job, site, postUrl) {
+  const push = (l) => { job.log.push(l); if (job.log.length > 500) job.log.shift(); };
+  job.status = 'verifying';
+  const target = postUrl || newestPostUrl(site);
+  const root = site.site_url;
+  const primary = target || root;
+  if (!primary) {
+    push('⚠ Brak site_url — nie mogę zweryfikować live.');
+    job.status = 'done';
+    job.result = { ...(job.result || {}), verify: { ok: false, reason: 'brak site_url' } };
+    return;
+  }
+  push(`⟳ Weryfikacja live: ${primary}…`);
+  const res = await verifyLive(primary);
+  if (res.ok) {
+    push(`✓ LIVE 200: ${primary} (próba ${res.attempts})`);
+    job.status = 'done';
+    job.result = { ...(job.result || {}), verify: { ok: true, url: primary, status: 200 } };
+    return;
+  }
+  // URL wpisu nie odpowiada — sprawdź root, żeby odróżnić brak deployu od złej ścieżki
+  if (target && root && root !== target) {
+    const rootRes = await verifyLive(root, { tries: 3, intervalMs: 4000 });
+    if (rootRes.ok) {
+      push(`⚠ Root żyje (200), ale URL wpisu wciąż ${res.status || 'bez odpowiedzi'}: ${target}`);
+      push('   → sprawdź heurystykę ścieżki albo poczekaj na propagację CloudFront.');
+      job.status = 'unverified';
+      job.result = { ...(job.result || {}), verify: { ok: false, url: target, status: res.status, rootOk: true } };
+      return;
+    }
+  }
+  push(`✗ Strona NIE odpowiada 200 po deployu: ${primary} (ostatni status: ${res.status || 'brak'})`);
+  job.status = 'unverified';
+  job.result = { ...(job.result || {}), verify: { ok: false, url: primary, status: res.status, rootOk: false } };
+}
+
 app.get('/api/content', wrap(async (req, res) => {
   const site = await siteById(req.query.site);
   const base = String(req.query.base || '');
@@ -388,15 +475,29 @@ app.post('/api/deploy', wrap(async (req, res) => {
   jobs.set(id, job);
   const push = (line) => { job.log.push(line); if (job.log.length > 500) job.log.shift(); };
 
-  const cmd = site.has_deploy ? './deploy.sh' : 'npm run build';
+  // `yes |` auto-potwierdza ewentualny interaktywny `read -p "Continue?"` w deploy.sh
+  // (bez TTY read wisiałby w nieskończoność) — nieszkodliwe dla skryptów bez promptu.
+  const cmd = site.has_deploy ? 'yes | ./deploy.sh' : 'npm run build';
   push(`$ ${cmd}  (w ${site.dir})`);
   const child = spawn(GIT_BASH, ['-lc', cmd], { cwd: site.dir, windowsHide: true });
   child.stdout.on('data', (d) => d.toString().split(/\r?\n/).filter(Boolean).forEach(push));
   child.stderr.on('data', (d) => d.toString().split(/\r?\n/).filter(Boolean).forEach(push));
-  child.on('close', (code) => {
-    job.status = code === 0 ? 'done' : 'failed';
+  child.on('close', async (code) => {
     job.ms = Date.now() - job.started;
-    push(code === 0 ? `✓ zakończono w ${Math.round(job.ms / 1000)}s` : `✗ exit code ${code}`);
+    if (code !== 0) {
+      job.status = 'failed';
+      push(`✗ exit code ${code}`);
+      return;
+    }
+    push(`✓ deploy zakończony w ${Math.round(job.ms / 1000)}s`);
+    // domknięcie e2e: potwierdź, że najnowszy wpis żyje pod swoim adresem
+    if (site.has_deploy && site.site_url) {
+      try { await verifyDeployLive(job, site, null); }
+      catch (e) { job.status = 'done'; push(`⚠ weryfikacja padła: ${e.message}`); }
+    } else {
+      job.status = 'done';
+      if (!site.has_deploy) push('⚠ brak deploy.sh — tylko build, bez publikacji na S3.');
+    }
   });
   child.on('error', (e) => { job.status = 'failed'; push(`✗ ${e.message}`); });
 
@@ -454,7 +555,7 @@ async function launchClaudeJob(site, prompt, { label, andDeploy = false, onDone 
   job.log.push(`⏳ ${label} — Claude (Opus 4.8, 1M) pracuje w ${site.dir}…`);
 
   const bashPrompt = '/' + promptFile.replace(/\\/g, '/').replace(':', '');
-  const cmd = `cd . && cat "${bashPrompt}" | ${CLAUDE_CMD}${andDeploy ? ' && ./deploy.sh' : ''}`;
+  const cmd = `cd . && cat "${bashPrompt}" | ${CLAUDE_CMD}${andDeploy ? ' && yes | ./deploy.sh' : ''}`;
   const child = spawn(GIT_BASH, ['-lc', cmd], { cwd: site.dir, windowsHide: true });
   let buf = '';
   child.stdout.on('data', (d) => {
@@ -464,11 +565,18 @@ async function launchClaudeJob(site, prompt, { label, andDeploy = false, onDone 
     lines.forEach((l) => pushStreamLine(job, l));
   });
   child.stderr.on('data', (d) => d.toString().split(/\r?\n/).filter(Boolean).forEach((l) => job.log.push(l)));
-  child.on('close', (code) => {
+  child.on('close', async (code) => {
     job.status = code === 0 ? 'done' : 'failed';
     job.ms = Date.now() - job.started;
     job.log.push(code === 0 ? `✓ zakończono w ${Math.round(job.ms / 60000)} min` : `✗ exit code ${code}`);
     fsp.unlink(promptFile).catch(() => {});
+    // domknięcie e2e: jeśli był auto-deploy, potwierdź live URL świeżo napisanego wpisu
+    if (code === 0 && andDeploy && site.site_url) {
+      const created = (job.claudeResult || '').match(/CREATED:\s*(\S+)/)?.[1] || null;
+      const postUrl = created ? urlForRel(site, created) : null;
+      try { await verifyDeployLive(job, site, postUrl); }
+      catch (e) { job.log.push(`⚠ weryfikacja padła: ${e.message}`); }
+    }
     if (onDone) onDone(job, code);
   });
   child.on('error', (e) => { job.status = 'failed'; job.log.push(`✗ ${e.message}`); });
@@ -647,8 +755,17 @@ async function autoblogTick() {
       andDeploy: row.tier === 'B' && site.has_deploy,
       onDone: async (j, code) => {
         const created = (j.claudeResult || '').match(/CREATED:\s*(\S+)/)?.[1] || null;
-        const slugPath = created ? created.replace(/^src\/content\//, '').replace(/\.(md|mdx)$/, '') : null;
-        const url = slugPath && site.site_url ? `${site.site_url}/${slugPath}/` : null;
+        const url = created && site.site_url ? urlForRel(site, created) : null;
+        const tierB = row.tier === 'B' && site.has_deploy;
+        const v = j.result?.verify;
+        // linia „Deploy" w digescie zależna od FAKTYCZNEGO stanu live
+        const deployLine = !tierB
+          ? 'NIE (tier A) — zdeployuj z publishera'
+          : v?.ok
+            ? '✓ wdrożony i POTWIERDZONY live (200)'
+            : v
+              ? `⚠ deploy poszedł, ale strona NIE odpowiada 200 (status ${v.status || 'brak'}) — sprawdź`
+              : 'wykonany (bez weryfikacji)';
         if (code === 0) {
           if (topicRow) await db.query(
             `UPDATE topic_queue SET status='published', published_at=now(), file_rel=$1, url=$2 WHERE id=$3`,
@@ -659,9 +776,13 @@ async function autoblogTick() {
             [site.id, `(wolna ręka) ${created || '?'}`, created, url]);
           await db.query('UPDATE autoblog SET last_run=now(), next_run=$1 WHERE site_id=$2',
             [nextRunAfter(7 / row.cadence), site.id]);
-          await sendDigest(`✍ ${site.name}: nowy artykuł`,
+          // gdy tier B, a strona nie potwierdzona live — alarm w temacie maila
+          const subj = (tierB && v && !v.ok)
+            ? `⚠ ${site.name}: wpis NIE potwierdzony live`
+            : `✍ ${site.name}: nowy artykuł`;
+          await sendDigest(subj,
             `Strona: ${site.name}\nTemat: ${topicRow ? topicRow.topic : 'wolna ręka'}\nPlik: ${created || '?'}\nURL: ${url || '?'}\n` +
-            `Deploy: ${row.tier === 'B' && site.has_deploy ? 'wykonany automatycznie' : 'NIE (tier A) — zdeployuj z publishera'}\n\nhttps://publish.torweb.pl`);
+            `Deploy: ${deployLine}\n\nhttps://publish.torweb.pl`);
         } else {
           if (topicRow) await db.query(`UPDATE topic_queue SET status='accepted' WHERE id=$1`, [topicRow.id]);
           await db.query('UPDATE autoblog SET next_run=now() + interval \'1 day\' WHERE site_id=$1', [site.id]);

@@ -21,7 +21,18 @@ ląduje w `.backups/` (plus historia git projektu).
 
 **Deploy**: przycisk uruchamia `./deploy.sh` projektu (build → `aws s3 sync` →
 invalidacja CloudFront) przez git-basha, z logiem na żywo w GUI. Projekty bez
-`deploy.sh` dostają fallback `npm run build` (z ostrzeżeniem).
+`deploy.sh` dostają fallback `npm run build` (z ostrzeżeniem). Deploy leci
+**nieinteraktywnie** (`yes | ./deploy.sh`) — interaktywny `read -p "Continue?"`
+w skrypcie nie zawiesza joba (bez TTY wisiałby w nieskończoność).
+
+**Domknięcie e2e — weryfikacja live**: po udanym deployu (exit 0) publisher
+sam sprawdza, że strona **faktycznie odpowiada 200 pod swoim adresem** (poll z
+retry na propagację CloudFront). Job kończy się `done` tylko gdy URL żyje;
+jeśli deploy poszedł, a strona nie odpowiada 200 — status `unverified` (⚠) i
+alert. URL wpisu liczy heurystyka `urlFor`; przy ręcznym deployu sprawdzany
+jest najnowszy wpis kolekcji. Rozróżnia „deploy nie wstał" (root ≠ 200) od
+„wstał, ale URL wpisu nie odpowiada" (zła ścieżka/propagacja). Autoblog tier B:
+gdy strona nie potwierdzona live, digest ma temat `⚠ … NIE potwierdzony live`.
 
 ## AI: lokalny Claude pisze artykuły (Opus 4.8, kontekst 1M)
 
