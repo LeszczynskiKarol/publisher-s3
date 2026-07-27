@@ -3,6 +3,7 @@ node_modules/
 frpc.toml
 .backups/
 .jobs/
+.reports/
 covers/.last-photo.b64
 covers/test-cover.jpg
 covers/.cover-*
