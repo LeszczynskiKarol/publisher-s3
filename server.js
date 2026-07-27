@@ -62,6 +62,9 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS settings (k text PRIMARY KEY, v text NOT NULL);
     INSERT INTO settings (k, v) VALUES ('autoblog_paused', 'false'), ('autoblog_daily_max', '2')
       ON CONFLICT DO NOTHING;
+    -- pętla z seo-panelem: temat pochodzący z rekomendacji nosi jej id,
+    -- żeby po publikacji domknąć cykl (QUEUED->PUBLISHED->MEASURED) po tamtej stronie
+    ALTER TABLE topic_queue ADD COLUMN IF NOT EXISTS seo_rec_id text;
   `);
 }
 
@@ -645,7 +648,14 @@ app.post('/api/queue', wrap(async (req, res) => {
 app.post('/api/queue/:id', wrap(async (req, res) => {
   const { status } = req.body;
   if (!['accepted', 'rejected', 'proposed'].includes(status)) return res.status(400).json({ error: 'zły status' });
-  await db.query('UPDATE topic_queue SET status=$1 WHERE id=$2', [status, req.params.id]);
+  const { rows: [row] } = await db.query(
+    'UPDATE topic_queue SET status=$1 WHERE id=$2 RETURNING seo_rec_id', [status, req.params.id]);
+  // odrzucenie tematu z rekomendacji → 90-dniowa karencja po stronie seo-panelu
+  if (row?.seo_rec_id && status === 'rejected' && SEO_PANEL_URL && SEO_PANEL_KEY) {
+    seoPanel(`/api/ext/recommendations/${row.seo_rec_id}`, {
+      method: 'PATCH', body: JSON.stringify({ status: 'REJECTED' }),
+    }).catch(() => {});
+  }
   res.json({ ok: true });
 }));
 
@@ -715,6 +725,78 @@ function firstBlogBase(site) {
   return blog?.base || null;
 }
 
+// ── seo-panel: pętla rekomendacji (silnik decay w seo.torweb.pl) ────────────
+// W dół: NEW_TOPIC z silnika → topic_queue jako 'proposed' (akceptacja w GUI).
+// W górę: każda publikacja → SeoEvent na timeline domeny; jeśli temat pochodził
+// z rekomendacji, przechodzi ona w PUBLISHED i po 31 dniach dostaje werdykt.
+const SEO_PANEL_URL = process.env.SEO_PANEL_URL;
+const SEO_PANEL_KEY = process.env.SEO_PANEL_KEY;
+
+async function seoPanel(pathname, opts = {}) {
+  const res = await fetch(`${SEO_PANEL_URL}${pathname}`, {
+    ...opts,
+    headers: { 'x-api-key': SEO_PANEL_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  if (!res.ok) throw new Error(`seo-panel ${pathname}: HTTP ${res.status}`);
+  return res.json();
+}
+
+const seoPanelDomain = (site) => apexOf(site.site_url).replace(/^www\./, '');
+
+async function syncSeoPanelRecommendations() {
+  if (!SEO_PANEL_URL || !SEO_PANEL_KEY) return;
+  try {
+    const { rows: sites } = await db.query(`
+      SELECT s.* FROM autoblog a JOIN astro_sites s ON s.id=a.site_id
+      WHERE a.enabled AND s.site_url IS NOT NULL`);
+    let added = 0;
+    for (const site of sites) {
+      const domain = seoPanelDomain(site);
+      let data;
+      try {
+        data = await seoPanel(`/api/ext/recommendations?domain=${encodeURIComponent(domain)}&status=PROPOSED&type=NEW_TOPIC`);
+      } catch (e) {
+        if (!/HTTP 404/.test(e.message)) console.error('[seo-panel]', domain, e.message);
+        continue; // 404 = domena nieśledzona w panelu — pomijamy po cichu
+      }
+      for (const rec of data?.recommendations || []) {
+        const { rows: [dup] } = await db.query('SELECT 1 FROM topic_queue WHERE seo_rec_id=$1', [rec.id]);
+        if (dup) continue;
+        await db.query(
+          `INSERT INTO topic_queue (site_id, topic, why, zrodlo, status, seo_rec_id)
+           VALUES ($1,$2,$3,'seo-panel','proposed',$4)`,
+          [site.id, rec.topic, rec.reason || null, rec.id]);
+        await seoPanel(`/api/ext/recommendations/${rec.id}`, {
+          method: 'PATCH', body: JSON.stringify({ status: 'QUEUED' }),
+        }).catch(() => {});
+        added++;
+      }
+    }
+    if (added) console.log(`[seo-panel] ${added} nowych tematów z rekomendacji w kolejce`);
+  } catch (e) { console.error('syncSeoPanelRecommendations:', e.message); }
+}
+
+async function reportPublishToSeoPanel(site, { url, title, seoRecId }) {
+  if (!SEO_PANEL_URL || !SEO_PANEL_KEY || !site.site_url) return;
+  try {
+    await seoPanel('/api/ext/events', {
+      method: 'POST',
+      body: JSON.stringify({
+        domain: seoPanelDomain(site),
+        type: 'CONTENT_PUBLISHED',
+        url: url || undefined,
+        title: title || undefined,
+        recommendationId: seoRecId || undefined,
+        data: { source: 'publisher' },
+      }),
+    });
+  } catch (e) {
+    if (!/HTTP 404/.test(e.message)) console.error('[seo-panel] event:', e.message);
+  }
+}
+
+setInterval(syncSeoPanelRecommendations, 6 * 3600 * 1000);
+
 async function autoblogTick() {
   try {
     if ((await getSetting('autoblog_paused')) === 'true') return;
@@ -776,6 +858,9 @@ async function autoblogTick() {
             [site.id, `(wolna ręka) ${created || '?'}`, created, url]);
           await db.query('UPDATE autoblog SET last_run=now(), next_run=$1 WHERE site_id=$2',
             [nextRunAfter(7 / row.cadence), site.id]);
+          await reportPublishToSeoPanel(site, {
+            url, title: topicRow ? topicRow.topic : created, seoRecId: topicRow?.seo_rec_id,
+          });
           // gdy tier B, a strona nie potwierdzona live — alarm w temacie maila
           const subj = (tierB && v && !v.ok)
             ? `⚠ ${site.name}: wpis NIE potwierdzony live`
@@ -859,4 +944,5 @@ app.use(express.static(path.join(__dirname, 'public')));
   app.listen(PORT, '127.0.0.1', () => console.log(`publisher (astro CMS) na http://127.0.0.1:${PORT}`));
   const n = await runScan();
   console.log(`Skan: ${n} projektów Astro.`);
+  await syncSeoPanelRecommendations();
 })();
